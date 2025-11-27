@@ -1,0 +1,51 @@
+// Insert AOI 
+var AOI_1 = ee.FeatureCollection('INSERT_AOI_PATHWAY');
+var aoi = AOI_1;
+
+//Sentinel-2 collection
+var s2 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(aoi)
+  .filterDate('2020-01-01', '2020-12-31')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20));
+
+//Cloud masking function (QA60)
+function maskS2(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+              .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).divide(10000);
+}
+
+//Apply mask + make composite
+var s2_clean = s2.map(maskS2);
+var composite = s2_clean.median().clip(aoi);
+
+// (Optional) visual check
+Map.centerObject(aoi, 9);
+Map.addLayer(composite, {bands: ['B4','B3','B2'], min:0.05, max:0.3}, 'S2 RGB masked');
+
+// BSI AFTER masking
+var bsi = composite.expression(
+  '((SWIR1 + RED) - (NIR + BLUE)) / ((SWIR1 + RED) + (NIR + BLUE))', {
+    'SWIR1': composite.select('B11'),
+    'RED':   composite.select('B4'),
+    'NIR':   composite.select('B8'),
+    'BLUE':  composite.select('B2')
+}).rename('BSI');
+
+Map.addLayer(bsi, {min: -1, max: 1, palette: ['blue','white','brown']}, 'BSI');
+
+// Print BSI statistics (mean, min,max) for the polygon 
+
+var stats= bsi.reduceRegion({
+  reducer: ee.Reducer.mean()
+  .combine(ee.Reducer.minMax(), '', true),
+  geometry: aoi,
+  scale:10, 
+  maxPixels:1e13
+  });
+  
+  print('BSI stats:', stats);
+
